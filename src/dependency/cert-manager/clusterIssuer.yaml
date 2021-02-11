@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1alpha2
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod-kong
+  labels:
+    name: letsencrypt-prod-kong
+    app: cert-manager
+spec:
+  acme:
+    email: bensasi.mohammed@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-kong
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+      - http01:
+          ingress:
+            class: kong
