@@ -27,6 +27,6 @@ COPY --from=build /usr/src/app/dist ./dist
 COPY ./src/dependency  ./dist/dependency/
 COPY --from=build /usr/src/app/node_modules ./node_modules
 
-COPY --from=build /root/google-cloud-sdk/bin ./gce_cmd
+COPY --from=build /root/google-cloud-sdk ./gce_cmd
 
 CMD ["node", "dist/main"]
