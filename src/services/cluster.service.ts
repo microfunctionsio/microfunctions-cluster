@@ -1,8 +1,6 @@
 import {HttpStatus, Inject, Injectable} from '@nestjs/common';
 import {ClusterDto} from '../dtos/cluster.dto';
-
 import {Cluster, ClusterDocument} from '../entitys/cluster';
-
 import {ClusterAccessError, IkubeConfig, KubernetesService} from './kubernetes.service';
 import {ConfigService} from '@nestjs/config';
 import {catchError, map, mergeMap, retryWhen, tap, toArray} from 'rxjs/operators';
@@ -27,7 +25,7 @@ import {StatusCluster} from '../interfaces/status.cluster';
 import {StatusHist, StatusHistDocument} from '../entitys/status.hist';
 import {v4 as uuid} from 'uuid';
 import {fromArray} from 'rxjs/internal/observable/fromArray';
-import {supportDistributions, supportVersions} from '../helpers/support.version';
+import { supportVersions} from '../helpers/support.version';
 import {IResponse} from "../interfaces/response";
 import {MicroFunctionException} from "../errors/micro.function.Exception";
 import {Messages, MessagesError} from "../messages";
@@ -53,8 +51,7 @@ export class ClusterService {
         return {
             status: HttpStatus.OK,
             data: {
-                versions: supportVersions,
-                distributions: supportDistributions,
+                versions: supportVersions
             },
         };
 
@@ -1038,6 +1035,6 @@ export class ClusterService {
         const versions: string[] = clusterInfo.version.split('.');
         const version = `${versions[0]}.${versions[1]}.*`;
 
-        return supportVersions.includes(version) && (supportDistributions.includes(clusterInfo.distribution) || clusterInfo.distribution === 'custom' || clusterInfo.distribution === 'vanilla');
+        return supportVersions.includes(version) ;
     }
 }
