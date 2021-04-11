@@ -1,8 +1,12 @@
-
-import { PodStatus } from '../enums/pods.enums';
-import { Kube } from './Kube';
-import {IContainerProbe, IPodContainer, IPodContainerStatus, IPodSpec, IPodStatus} from "../interfaces/pods";
-
+import {Kube} from './Kube';
+import {
+  IContainerProbe,
+  IPodContainer,
+  IPodContainerStatus,
+  IPodSpec,
+  IPodStatus,
+  PodStatus
+} from '@microfunctions/common';
 
 export class Pod extends Kube {
   private spec: IPodSpec;

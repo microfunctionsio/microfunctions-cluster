@@ -1,6 +1,5 @@
 import {Kube} from './Kube';
-import {StatusClusterEnums} from '../enums/status.cluster.Enums';
-
+import {ClusterStatus} from "@microfunctions/common";
 export class Cluster extends Kube {
   spec: {
     clusterNetwork?: {
@@ -36,14 +35,14 @@ export class Cluster extends Kube {
 
   getStatus() {
     if (this.metadata.deletionTimestamp) {
-      return StatusClusterEnums.REMOVING;
+      return ClusterStatus.REMOVING;
     }
     if (!this.status || !this.status) {
-      return StatusClusterEnums.CREATING;
+      return ClusterStatus.CREATING;
     }
     if (this.status.errorMessage) {
-      return StatusClusterEnums.ERROR;
+      return ClusterStatus.ERROR;
     }
-    return StatusClusterEnums.ACTIVE;
+    return ClusterStatus.ACTIVE;
   }
 }

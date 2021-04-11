@@ -1,9 +1,8 @@
-import {StepEnum} from '../enums/step.enum';
-import {StatusClusterEnums} from '../enums/status.cluster.Enums';
+
 import {Expose} from 'class-transformer';
 import {Prop, Schema, SchemaFactory} from '@nestjs/mongoose';
 import {Document} from 'mongoose';
-
+import {ClusterStatus,ClusterSteps} from "@microfunctions/common";
 export type StatusHistDocument = StatusHist & Document;
 @Schema()
 export class StatusHist {
@@ -13,11 +12,11 @@ export class StatusHist {
   @Prop()
   uuidInstall: string;
   @Expose()
-  @Prop({type:StepEnum})
-  step: StepEnum;
+  @Prop({type:ClusterSteps})
+  step: ClusterSteps;
   @Expose()
-  @Prop({type:StatusClusterEnums})
-  status: StatusClusterEnums;
+  @Prop({type:ClusterStatus})
+  status: ClusterStatus;
   @Expose()
   @Prop()
   message: string;

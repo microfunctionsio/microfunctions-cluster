@@ -565,6 +565,9 @@
     underscore "^1.9.1"
     ws "^7.3.1"
 
+"@microfunctions/common@../microfunctions-common/":
+  version "0.1.1"
+
 "@nestjs/cli@^7.0.0":
   version "7.5.4"
   resolved "https://registry.yarnpkg.com/@nestjs/cli/-/cli-7.5.4.tgz#d4cdce388d7f6a32dabdf5bab909af23653f7740"

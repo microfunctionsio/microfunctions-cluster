@@ -8,30 +8,26 @@ import {RpcException} from '@nestjs/microservices';
 import {catchErrorMongo, MessageErrorCode} from '../helpers/error.helpers';
 import {from, Observable, of, throwError, timer} from 'rxjs';
 import {plainToClass} from 'class-transformer';
-import {StepEnum} from '../enums/step.enum';
-import {StatusClusterEnums} from '../enums/status.cluster.Enums';
-import {VisibilityCluster} from '../enums/visibility.cluster';
+
 import {WINSTON_MODULE_PROVIDER} from 'nest-winston';
 import {Logger} from 'winston';
 import {Service} from '../classes/service';
-import {User} from '../classes/user';
 import {decrypt, encrypt} from '../helpers/symmetricCrypto';
-import {MetricsConfiguration} from '../interfaces/metrics.configuration';
 import {fromPromise} from 'rxjs/internal-compatibility';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as hb from 'handlebars';
-import {StatusCluster} from '../interfaces/status.cluster';
+import {StatusCluster} from '../classes/status.cluster';
 import {StatusHist, StatusHistDocument} from '../entitys/status.hist';
 import {v4 as uuid} from 'uuid';
 import {fromArray} from 'rxjs/internal/observable/fromArray';
-import { supportVersions} from '../helpers/support.version';
-import {IResponse} from "../interfaces/response";
+import {supportVersions} from '../helpers/support.version';
 import {MicroFunctionException} from "../errors/micro.function.Exception";
 import {Messages, MessagesError} from "../messages";
-
 import {Model} from "mongoose";
 import {InjectModel} from "@nestjs/mongoose";
+import {IUser,IResponse, ClusterStatus ,ClusterSteps,MetricsConfiguration} from "@microfunctions/common";
+
 
 @Injectable()
 export class ClusterService {
@@ -46,7 +42,7 @@ export class ClusterService {
         this.organizationSecret = this.configService.get('CLUSTER_SECRET');
     }
 
-    public listSupportVersion(user: User) {
+    public listSupportVersion(user: IUser) {
 
         return {
             status: HttpStatus.OK,
@@ -57,7 +53,7 @@ export class ClusterService {
 
     }
 
-    public addCluster(user: User, clusterDto: ClusterDto) {
+    public addCluster(user: IUser, clusterDto: ClusterDto) {
 
         return this.kubernetesService.parseCluster(clusterDto.config).pipe(
             mergeMap((clusterInfo: IkubeConfig) => {
@@ -107,8 +103,8 @@ export class ClusterService {
             cluster.distribution = clusterInfo.distribution;
             cluster.capacity = clusterInfo.capacity;
             cluster.status = {
-                step: StepEnum.ADDED,
-                status: StatusClusterEnums.ADDED,
+                step: ClusterSteps.ADDED,
+                status: ClusterStatus.ADDED,
             };
             const clusterModule = new this.clusterModule(cluster);
 
@@ -133,25 +129,25 @@ export class ClusterService {
         }));
     }
 
-    public listCluster(user: User): Observable<any> {
+    public listCluster(user: IUser): Observable<any> {
 
-        return from(this.clusterModule.find().or([{idUser: user.id}, {visibility: VisibilityCluster.PUBLIC}])).pipe(
+        return from(this.clusterModule.find({})).pipe(
             catchError(err => catchErrorMongo(err, 'The application encountered an unexpected error')),
             mergeMap((clusters: Cluster[]) => from(clusters)),
             mergeMap((cluster: Cluster) => {
                 cluster.canShowStatus = cluster.idUser === user.id;
                 cluster.canDelete = cluster.idUser === user.id;
-                cluster.canInstall = cluster.idUser === user.id && (cluster.status.step === StepEnum.ADDED ||
-                    (cluster.status.step === StepEnum.UNINSTALL && cluster.status.status == StatusClusterEnums.UNINSTALL) || cluster.status.status === StatusClusterEnums.ERROR || false);
-                cluster.canUninstall = false;//cluster.idUser === user.id && ((cluster.status.step === StepEnum.INSTALL && cluster.status.status == StatusClusterEnums.INSTALLED) || (cluster.status.step === StepEnum.ACTIVE && cluster.status.status == StatusClusterEnums.ACTIVE) || cluster.status.status === StatusClusterEnums.ERROR || false);
+                cluster.canInstall = cluster.idUser === user.id && (cluster.status.step === ClusterSteps.ADDED ||
+                    (cluster.status.step === ClusterSteps.UNINSTALL && cluster.status.status == ClusterStatus.UNINSTALL) || cluster.status.status === ClusterStatus.ERROR || false);
+                cluster.canUninstall = false;//cluster.idUser === user.id && ((cluster.status.step === ClusterSteps.INSTALL && cluster.status.status == ClusterStatus.INSTALLED) || (cluster.status.step === ClusterSteps.ACTIVE && cluster.status.status == ClusterStatus.ACTIVE) || cluster.status.status === ClusterStatus.ERROR || false);
                 cluster.kubeConfig = decrypt(this.organizationSecret, cluster.ivString, cluster.kubeConfig);
 
                 return this.kubernetesService.getNodes(cluster.kubeConfig).pipe(
                     catchError((err) => {
                         this.logger.error('listCluster  Start ', {user, cluster, err});
                         cluster.status = {
-                            step: StepEnum.ACTIVE,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.ACTIVE,
+                            status: ClusterStatus.ERROR,
                             message: err,
                         };
                         return of(cluster);
@@ -175,7 +171,7 @@ export class ClusterService {
         );
     }
 
-    public deleteCluster(user: User, cluster: ClusterDto) {
+    public deleteCluster(user: IUser, cluster: ClusterDto) {
         this.logger.debug('deleteCluster  ', {user, cluster});
         return from(this.clusterModule.deleteOne({_id: cluster.idCluster, idUser: user.id})).pipe(
             map((resulta: any) => {
@@ -187,7 +183,7 @@ export class ClusterService {
         );
     }
 
-    public getClusterStatus(user: User, cluster: ClusterDto) {
+    public getClusterStatus(user: IUser, cluster: ClusterDto) {
         return from(this.clusterModule.findOne().or([{idUser: user.id, _id: cluster.idCluster}, {
             _id: cluster.idCluster
         }])).pipe(
@@ -208,7 +204,7 @@ export class ClusterService {
 
     }
 
-    public getClusterConfig(user: User, idCluster: string): Observable<IResponse> {
+    public getClusterConfig(user: IUser, idCluster: string): Observable<IResponse> {
 
         return from(this.clusterModule.findOne({_id: idCluster})).pipe(
             map((cluster: any) => {
@@ -231,15 +227,15 @@ export class ClusterService {
         );
     }
 
-    public installCluster(user: User, cluster: ClusterDto) {
+    public installCluster(user: IUser, cluster: ClusterDto) {
         this.logger.log('installCluster  Start ', {user, cluster});
         const uuidInstall: string = uuid();
         this.getClusterConfig(user, cluster.idCluster).pipe(
             map((response: IResponse) => response.data),
             mergeMap((kubeConfig: IkubeConfig) => {
                 this.updateStatus(user, cluster.idCluster, {
-                    step: StepEnum.INSTALL,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALL,
+                    status: ClusterStatus.INSTALLING,
                 });
                 return this.creeteMfNameSpace(kubeConfig, uuidInstall).pipe(
                     mergeMap(() => {
@@ -291,16 +287,16 @@ export class ClusterService {
         }, (err: any) => {
             this.logger.error('InstallCluster Err  ', {user, cluster, err});
             this.updateStatus(user, cluster.idCluster, {
-                step: StepEnum.INSTALL,
-                status: StatusClusterEnums.ERROR,
+                step: ClusterSteps.INSTALL,
+                status: ClusterStatus.ERROR,
                 message: err?.message || ''
             });
         }, () => {
             this.logger.log(' InstallCluster  End', {user, cluster});
 
             this.updateStatus(user, cluster.idCluster, {
-                step: StepEnum.ACTIVE,
-                status: StatusClusterEnums.ACTIVE,
+                step: ClusterSteps.ACTIVE,
+                status: ClusterStatus.ACTIVE,
             });
         });
         return of({
@@ -310,7 +306,7 @@ export class ClusterService {
 
     }
 
-    public uninstallCluster(user: User, cluster: ClusterDto) {
+    public uninstallCluster(user: IUser, cluster: ClusterDto) {
         this.logger.log('uninstallCluster  Start', {user, cluster});
         const uuidInstall: string = uuid();
 
@@ -318,8 +314,8 @@ export class ClusterService {
             map((response: IResponse) => response.data),
             mergeMap((kubeConfig: IkubeConfig) => {
                 this.updateStatus(user, cluster.idCluster, {
-                    step: StepEnum.UNINSTALL,
-                    status: StatusClusterEnums.UNINSTALLING,
+                    step: ClusterSteps.UNINSTALL,
+                    status: ClusterStatus.UNINSTALLING,
                 });
                 return this.uninstallPrometheus(kubeConfig, uuidInstall).pipe(
                     mergeMap(() => {
@@ -351,15 +347,15 @@ export class ClusterService {
         }, (err: any) => {
             this.logger.error('uninstallCluster err  ', {user, cluster, err});
             this.updateStatus(user, cluster.idCluster, {
-                step: StepEnum.UNINSTALL,
-                status: StatusClusterEnums.ERROR,
+                step: ClusterSteps.UNINSTALL,
+                status: ClusterStatus.ERROR,
                 message: err.message,
             });
         }, () => {
             this.logger.log('uninstallCluster  End ', {user, cluster});
             this.updateStatus(user, cluster.idCluster, {
-                step: StepEnum.UNINSTALL,
-                status: StatusClusterEnums.UNINSTALL,
+                step: ClusterSteps.UNINSTALL,
+                status: ClusterStatus.UNINSTALL,
             });
         });
         return of({
@@ -369,7 +365,7 @@ export class ClusterService {
 
     }
 
-    private updateStatus(user: User, idCluster: string, statusCluster: StatusCluster) {
+    private updateStatus(user: IUser, idCluster: string, statusCluster: StatusCluster) {
 
         this.clusterModule.updateOne({_id: idCluster}, {status: statusCluster}).catch((err => {
             this.logger.error('updateStatus  ', {user, idCluster, err});
@@ -378,8 +374,8 @@ export class ClusterService {
 
     private checkLoadBalancers(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.CHECKLOADBALANCERS,
-            status: StatusClusterEnums.CHECKING,
+            step: ClusterSteps.CHECKLOADBALANCERS,
+            status: ClusterStatus.CHECKING,
         }, kubeConfig.id, uuidInstall);
 
         return of(kubeConfig.kubeConfig).pipe(
@@ -405,12 +401,12 @@ export class ClusterService {
                     }),
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.CHECKLOADBALANCERS,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.CHECKLOADBALANCERS,
+                            status: ClusterStatus.ERROR,
                             message: err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.CHECKLOADBALANCERS,
+                            step: ClusterSteps.CHECKLOADBALANCERS,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.message || err.response.body.message,
@@ -418,8 +414,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.CHECKLOADBALANCERS,
-                            status: StatusClusterEnums.CHECKED,
+                            step: ClusterSteps.CHECKLOADBALANCERS,
+                            status: ClusterStatus.CHECKED,
                         }, kubeConfig.id, uuidInstall);
                     }),
                 );
@@ -444,18 +440,18 @@ export class ClusterService {
                 if (exist)
                     return of(true);
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLKUBELESS,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALLKUBELESS,
+                    status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kubeless/kubeless-v${kubelessVersion}.yaml`)).pipe(
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLKUBELESS,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.INSTALLKUBELESS,
+                            status: ClusterStatus.ERROR,
                             message: err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.INSTALLKUBELESS,
+                            step: ClusterSteps.INSTALLKUBELESS,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.response.body.message,
@@ -463,8 +459,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLKUBELESS,
-                            status: StatusClusterEnums.INSTALLED,
+                            step: ClusterSteps.INSTALLKUBELESS,
+                            status: ClusterStatus.INSTALLED,
                         }, kubeConfig.id, uuidInstall);
 
                     }));
@@ -476,18 +472,18 @@ export class ClusterService {
     private uninstalKubeless(kubeConfig: IkubeConfig, uuidInstall: string) {
         const kubelessVersion = '1.0.7';
         this.addClusterStatus({
-            step: StepEnum.UNINSTALLKUBELESS,
-            status: StatusClusterEnums.UNINSTALL,
+            step: ClusterSteps.UNINSTALLKUBELESS,
+            status: ClusterStatus.UNINSTALL,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kubeless/kubeless-v${kubelessVersion}.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLKUBELESS,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.UNINSTALLKUBELESS,
+                    status: ClusterStatus.ERROR,
                     message: err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.UNINSTALLKUBELESS,
+                    step: ClusterSteps.UNINSTALLKUBELESS,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.response.body.message,
@@ -495,8 +491,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLKUBELESS,
-                    status: StatusClusterEnums.UNINSTALL,
+                    step: ClusterSteps.UNINSTALLKUBELESS,
+                    status: ClusterStatus.UNINSTALL,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -504,18 +500,18 @@ export class ClusterService {
 
     private creeteMfNameSpace(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.CREETENAMESPACE,
-            status: StatusClusterEnums.CREATING,
+            step: ClusterSteps.CREETENAMESPACE,
+            status: ClusterStatus.CREATING,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}microfunctions.namespace.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.CREETENAMESPACE,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.CREETENAMESPACE,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.CREETENAMESPACE,
+                    step: ClusterSteps.CREETENAMESPACE,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -523,8 +519,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.CREETENAMESPACE,
-                    status: StatusClusterEnums.CREATED,
+                    step: ClusterSteps.CREETENAMESPACE,
+                    status: ClusterStatus.CREATED,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -532,18 +528,18 @@ export class ClusterService {
 
     private deleteMfNameSpace(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.DELETENAMESPACE,
-            status: StatusClusterEnums.REMOVING,
+            step: ClusterSteps.DELETENAMESPACE,
+            status: ClusterStatus.REMOVING,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}microfunctions.namespace.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.DELETENAMESPACE,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.DELETENAMESPACE,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.DELETENAMESPACE,
+                    step: ClusterSteps.DELETENAMESPACE,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -551,8 +547,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.DELETENAMESPACE,
-                    status: StatusClusterEnums.REMOVED,
+                    step: ClusterSteps.DELETENAMESPACE,
+                    status: ClusterStatus.REMOVED,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -567,18 +563,18 @@ export class ClusterService {
                 if (exist)
                     return of(true);
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLMETRICSSERVER,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALLMETRICSSERVER,
+                    status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}metrics-server/components-v${metricsServerVersion}.yaml`)).pipe(
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLMETRICSSERVER,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.INSTALLMETRICSSERVER,
+                            status: ClusterStatus.ERROR,
                             message: err.message || err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.INSTALLMETRICSSERVER,
+                            step: ClusterSteps.INSTALLMETRICSSERVER,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.message || err.response.body.message,
@@ -586,8 +582,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLMETRICSSERVER,
-                            status: StatusClusterEnums.INSTALLED,
+                            step: ClusterSteps.INSTALLMETRICSSERVER,
+                            status: ClusterStatus.INSTALLED,
                         }, kubeConfig.id, uuidInstall);
 
                     }));
@@ -605,18 +601,18 @@ export class ClusterService {
                 if (exist)
                     return of(true);
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLCERTMANAGER,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALLCERTMANAGER,
+                    status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}cert-manager/cert-manager-v${certManagerVersion}.yaml`)).pipe(
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLCERTMANAGER,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.INSTALLCERTMANAGER,
+                            status: ClusterStatus.ERROR,
                             message: err.message || err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.INSTALLCERTMANAGER,
+                            step: ClusterSteps.INSTALLCERTMANAGER,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.message || err.response.body.message,
@@ -624,8 +620,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLCERTMANAGER,
-                            status: StatusClusterEnums.INSTALLED,
+                            step: ClusterSteps.INSTALLCERTMANAGER,
+                            status: ClusterStatus.INSTALLED,
                         }, kubeConfig.id, uuidInstall);
 
                     }));
@@ -636,18 +632,18 @@ export class ClusterService {
     }
     private installCertClusterIssuer(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.ADDCERTCLUSTERISSUER,
-            status: StatusClusterEnums.ADDED,
+            step: ClusterSteps.ADDCERTCLUSTERISSUER,
+            status: ClusterStatus.ADDED,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}cert-manager/clusterIssuer.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.ADDCERTCLUSTERISSUER,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.ADDCERTCLUSTERISSUER,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.ADDCERTCLUSTERISSUER,
+                    step: ClusterSteps.ADDCERTCLUSTERISSUER,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -655,8 +651,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.ADDCERTCLUSTERISSUER,
-                    status: StatusClusterEnums.ADDED,
+                    step: ClusterSteps.ADDCERTCLUSTERISSUER,
+                    status: ClusterStatus.ADDED,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -666,18 +662,18 @@ export class ClusterService {
         const certManagerVersion = '1.1.0';
 
         this.addClusterStatus({
-            step: StepEnum.UNINSTALLCERTMANAGER,
-            status: StatusClusterEnums.UNINSTALL,
+            step: ClusterSteps.UNINSTALLCERTMANAGER,
+            status: ClusterStatus.UNINSTALL,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}cert-manager/cert-manager-v${certManagerVersion}.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLCERTMANAGER,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.UNINSTALLCERTMANAGER,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.UNINSTALLCERTMANAGER,
+                    step: ClusterSteps.UNINSTALLCERTMANAGER,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -685,8 +681,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLCERTMANAGER,
-                    status: StatusClusterEnums.UNINSTALL,
+                    step: ClusterSteps.UNINSTALLCERTMANAGER,
+                    status: ClusterStatus.UNINSTALL,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -695,8 +691,8 @@ export class ClusterService {
 
     private installPrometheus(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.INSTALLPROMETHEUS,
-            status: StatusClusterEnums.INSTALLING,
+            step: ClusterSteps.INSTALLPROMETHEUS,
+            status: ClusterStatus.INSTALLING,
         }, kubeConfig.id, uuidInstall);
         const name = 'metrics';
 
@@ -744,12 +740,12 @@ export class ClusterService {
             }),
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLPROMETHEUS,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.INSTALLPROMETHEUS,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.INSTALLPROMETHEUS,
+                    step: ClusterSteps.INSTALLPROMETHEUS,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -757,8 +753,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLPROMETHEUS,
-                    status: StatusClusterEnums.INSTALLED,
+                    step: ClusterSteps.INSTALLPROMETHEUS,
+                    status: ClusterStatus.INSTALLED,
                 }, kubeConfig.id, uuidInstall);
 
             }),
@@ -768,8 +764,8 @@ export class ClusterService {
 
     private uninstallPrometheus(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
-            step: StepEnum.UNINSTALLPROMETHEUS,
-            status: StatusClusterEnums.UNINSTALL,
+            step: ClusterSteps.UNINSTALLPROMETHEUS,
+            status: ClusterStatus.UNINSTALL,
         }, kubeConfig.id, uuidInstall);
         const name = 'metrics';
         const config: MetricsConfiguration = {
@@ -804,12 +800,12 @@ export class ClusterService {
             }),
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLPROMETHEUS,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.UNINSTALLPROMETHEUS,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.UNINSTALLPROMETHEUS,
+                    step: ClusterSteps.UNINSTALLPROMETHEUS,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -817,8 +813,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLPROMETHEUS,
-                    status: StatusClusterEnums.UNINSTALL,
+                    step: ClusterSteps.UNINSTALLPROMETHEUS,
+                    status: ClusterStatus.UNINSTALL,
                 }, kubeConfig.id, uuidInstall);
 
             }),
@@ -833,18 +829,18 @@ export class ClusterService {
                 if (exist)
                     return of(true);
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLKONG,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALLKONG,
+                    status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/kong-v${kongVersion}.yaml`)).pipe(
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLKONG,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.INSTALLKONG,
+                            status: ClusterStatus.ERROR,
                             message: err.message || err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.INSTALLKONG,
+                            step: ClusterSteps.INSTALLKONG,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.message || err.response.body.message,
@@ -852,8 +848,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLKONG,
-                            status: StatusClusterEnums.INSTALLED,
+                            step: ClusterSteps.INSTALLKONG,
+                            status: ClusterStatus.INSTALLED,
                         }, kubeConfig.id, uuidInstall);
 
                     }));
@@ -866,18 +862,18 @@ export class ClusterService {
         const kongVersion = '2.0.5';
 
         this.addClusterStatus({
-            step: StepEnum.UNINSTALLKONG,
-            status: StatusClusterEnums.UNINSTALL,
+            step: ClusterSteps.UNINSTALLKONG,
+            status: ClusterStatus.UNINSTALL,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/kong-v${kongVersion}.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLKONG,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.UNINSTALLKONG,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.UNINSTALLKONG,
+                    step: ClusterSteps.UNINSTALLKONG,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -885,8 +881,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLKONG,
-                    status: StatusClusterEnums.UNINSTALL,
+                    step: ClusterSteps.UNINSTALLKONG,
+                    status: ClusterStatus.UNINSTALL,
                 }, kubeConfig.id, uuidInstall);
 
             }));
@@ -900,18 +896,18 @@ export class ClusterService {
                 if (exist)
                     return of(true);
                 this.addClusterStatus({
-                    step: StepEnum.INSTALLINGRESS,
-                    status: StatusClusterEnums.INSTALLING,
+                    step: ClusterSteps.INSTALLINGRESS,
+                    status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}ingress/do/ingress-v${kubelessVersion}.yaml`)).pipe(
                     catchError((err: any) => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLINGRESS,
-                            status: StatusClusterEnums.ERROR,
+                            step: ClusterSteps.INSTALLINGRESS,
+                            status: ClusterStatus.ERROR,
                             message: err.message || err.response.body.message,
                         }, kubeConfig.id, uuidInstall);
                         throw new RpcException({
-                            step: StepEnum.INSTALLINGRESS,
+                            step: ClusterSteps.INSTALLINGRESS,
                             status: HttpStatus.EXPECTATION_FAILED,
                             code: MessageErrorCode.CLUSTER_ERROR,
                             message: err.message || err.response.body.message,
@@ -919,8 +915,8 @@ export class ClusterService {
                     }),
                     tap(() => {
                         this.addClusterStatus({
-                            step: StepEnum.INSTALLINGRESS,
-                            status: StatusClusterEnums.INSTALLED,
+                            step: ClusterSteps.INSTALLINGRESS,
+                            status: ClusterStatus.INSTALLED,
                         }, kubeConfig.id, uuidInstall);
 
                     }));
@@ -932,18 +928,18 @@ export class ClusterService {
     private uninstalIngress(kubeConfig: IkubeConfig, uuidInstall: string) {
         const kubelessVersion = '0.41.2';
         this.addClusterStatus({
-            step: StepEnum.UNINSTALLINGRESS,
-            status: StatusClusterEnums.UNINSTALL,
+            step: ClusterSteps.UNINSTALLINGRESS,
+            status: ClusterStatus.UNINSTALL,
         }, kubeConfig.id, uuidInstall);
         return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}/ingress/do/ingress-v${kubelessVersion}.yaml`)).pipe(
             catchError((err: any) => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLINGRESS,
-                    status: StatusClusterEnums.ERROR,
+                    step: ClusterSteps.UNINSTALLINGRESS,
+                    status: ClusterStatus.ERROR,
                     message: err.message || err.response.body.message,
                 }, kubeConfig.id, uuidInstall);
                 throw new RpcException({
-                    step: StepEnum.UNINSTALLINGRESS,
+                    step: ClusterSteps.UNINSTALLINGRESS,
                     status: HttpStatus.EXPECTATION_FAILED,
                     code: MessageErrorCode.CLUSTER_ERROR,
                     message: err.message || err.response.body.message,
@@ -951,8 +947,8 @@ export class ClusterService {
             }),
             tap(() => {
                 this.addClusterStatus({
-                    step: StepEnum.UNINSTALLINGRESS,
-                    status: StatusClusterEnums.UNINSTALL,
+                    step: ClusterSteps.UNINSTALLINGRESS,
+                    status: ClusterStatus.UNINSTALL,
                 }, kubeConfig.id, uuidInstall);
 
             }));
