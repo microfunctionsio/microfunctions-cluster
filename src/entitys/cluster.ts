@@ -2,8 +2,7 @@ import {Expose} from 'class-transformer';
 import {Prop, Schema, SchemaFactory} from '@nestjs/mongoose';
 import {Document} from 'mongoose';
 
-
-import {StatusCluster} from '../interfaces/status.cluster';
+import {StatusCluster} from "../classes/status.cluster";
 
 export type ClusterDocument = Cluster & Document;
 class Capacity {

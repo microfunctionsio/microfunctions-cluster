@@ -14,7 +14,7 @@ import {Service} from "../classes/service";
 
 import fse = require('fs-extra');
 
-import {PodStatus} from "../enums/pods.enums";
+import {PodStatus} from "@microfunctions/common";
 import {Pod} from "../classes/pod";
 
 interface RouteParams {

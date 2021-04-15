@@ -565,6 +565,11 @@
     underscore "^1.9.1"
     ws "^7.3.1"
 
+"@microfunctions/common@^0.1.6":
+  version "0.1.6"
+  resolved "https://registry.yarnpkg.com/@microfunctions/common/-/common-0.1.6.tgz#33a35684b4812b94495887f1f22e971d31df4445"
+  integrity sha512-/rGd2Ved2GvdK5p9qQILGOVqmqBtvYO8CMq1dnuDrspAf+OKN1fcLDzhoI/6rznOs/MU3FwWKO/qJm+ZQkWn6A==
+
 "@nestjs/cli@^7.0.0":
   version "7.5.4"
   resolved "https://registry.yarnpkg.com/@nestjs/cli/-/cli-7.5.4.tgz#d4cdce388d7f6a32dabdf5bab909af23653f7740"

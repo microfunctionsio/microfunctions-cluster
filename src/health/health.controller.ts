@@ -5,7 +5,7 @@ import {
     HttpHealthIndicator, MicroserviceHealthIndicator,
     MongooseHealthIndicator
 } from '@nestjs/terminus';
-import {MqttOptions, RmqOptions, Transport} from "@nestjs/microservices";
+import { RmqOptions, Transport} from "@nestjs/microservices";
 import {ConfigService} from "@nestjs/config";
 @Controller('health')
 export class HealthController {
