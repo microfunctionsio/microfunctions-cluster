@@ -3,7 +3,7 @@ import {ClusterDto} from '../dtos/cluster.dto';
 import {Cluster, ClusterDocument} from '../entitys/cluster';
 import {ClusterAccessError, IkubeConfig, KubernetesService} from './kubernetes.service';
 import {ConfigService} from '@nestjs/config';
-import {catchError, map, mergeMap, retryWhen, tap, toArray} from 'rxjs/operators';
+import {catchError, filter, map, mergeMap, retryWhen, tap, toArray} from 'rxjs/operators';
 import {RpcException} from '@nestjs/microservices';
 import {catchErrorMongo, MessageErrorCode} from '../helpers/error.helpers';
 import {from, Observable, of, throwError, timer} from 'rxjs';
@@ -134,6 +134,7 @@ export class ClusterService {
         return from(this.clusterModule.find({})).pipe(
             catchError(err => catchErrorMongo(err, 'The application encountered an unexpected error')),
             mergeMap((clusters: Cluster[]) => from(clusters)),
+            filter((cluster: Cluster)=> cluster.status.status === ClusterStatus.ACTIVE),
             mergeMap((cluster: Cluster) => {
                 cluster.canShowStatus = cluster.idUser === user.id;
                 cluster.canDelete = cluster.idUser === user.id;
