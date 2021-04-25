@@ -134,7 +134,6 @@ export class ClusterService {
         return from(this.clusterModule.find({})).pipe(
             catchError(err => catchErrorMongo(err, 'The application encountered an unexpected error')),
             mergeMap((clusters: Cluster[]) => from(clusters)),
-            filter((cluster: Cluster)=> cluster.status.status === ClusterStatus.ACTIVE),
             mergeMap((cluster: Cluster) => {
                 cluster.canShowStatus = cluster.idUser === user.id;
                 cluster.canDelete = cluster.idUser === user.id;
