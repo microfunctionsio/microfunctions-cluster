@@ -37,10 +37,6 @@ export class ClusterController {
     return this.clusterService.installCluster(user, cluster);
   }
 
-  @MessagePattern({ cmd: 'uninstall-cluster' })
-  uninstallCluster(@Payload() cluster: ClusterDto, @GetUser() user: IUser) {
-    return this.clusterService.uninstallCluster(user, cluster);
-  }
 
   @MessagePattern({ cmd: 'status-cluster' })
   getClusterStatus(@Payload() cluster: ClusterDto, @GetUser() user: IUser) {

@@ -191,6 +191,10 @@ spec:
               type: array
             regex_priority:
               type: integer
+            request_buffering:
+              type: boolean
+            response_buffering:
+              type: boolean
             snis:
               items:
                 type: string
@@ -636,7 +640,7 @@ spec:
               value: /dev/stderr
             - name: KONG_PROXY_ERROR_LOG
               value: /dev/stderr
-          image: kong:2.2
+          image: kong:2.3
           lifecycle:
             preStop:
               exec:
@@ -692,7 +696,7 @@ spec:
                 fieldRef:
                   apiVersion: v1
                   fieldPath: metadata.namespace
-          image: kong-docker-kubernetes-ingress-controller.bintray.io/kong-ingress-controller:1.1
+          image: kong/kubernetes-ingress-controller:1.2
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 3
