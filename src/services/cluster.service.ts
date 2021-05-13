@@ -228,7 +228,7 @@ export class ClusterService {
     }
 
     public installCluster(user: IUser, cluster: ClusterDto) {
-        this.logger.log('installCluster  Start ', {user, cluster});
+        this.logger.log('installCluster  Start ', {user, idCluster:cluster.idCluster});
         const uuidInstall: string = uuid();
         this.getClusterConfig(user, cluster.idCluster).pipe(
             map((response: IResponse) => response.data),
@@ -248,7 +248,7 @@ export class ClusterService {
                             }),
                             retryWhen(
                                 this.retryStrategy({
-                                    maxRetryAttempts: 5,
+                                    maxRetryAttempts: 10,
                                 }),
                             ),
                         );
@@ -302,65 +302,6 @@ export class ClusterService {
         return of({
             status: HttpStatus.ACCEPTED,
             message: Messages.instalationCLusterProgress,
-        });
-
-    }
-
-    public uninstallCluster(user: IUser, cluster: ClusterDto) {
-        this.logger.log('uninstallCluster  Start', {user, cluster});
-        const uuidInstall: string = uuid();
-
-        this.getClusterConfig(user, cluster.idCluster).pipe(
-            map((response: IResponse) => response.data),
-            mergeMap((kubeConfig: IkubeConfig) => {
-                this.updateStatus(user, cluster.idCluster, {
-                    step: ClusterSteps.UNINSTALL,
-                    status: ClusterStatus.UNINSTALLING,
-                });
-                return this.uninstallPrometheus(kubeConfig, uuidInstall).pipe(
-                    mergeMap(() => {
-                        return this.uninstallCertManager(kubeConfig, uuidInstall);
-                    }),
-                    mergeMap(() => {
-                        return this.uninstallKong(kubeConfig, uuidInstall).pipe(
-                            mergeMap(() => {
-                                return this.uninstalIngress(kubeConfig, uuidInstall);
-                            }),
-                            retryWhen(
-                                this.retryStrategy({
-                                    maxRetryAttempts: 5,
-                                }),
-                            ),
-                        );
-                    }),
-                    mergeMap(() => {
-                        return this.uninstalKubeless(kubeConfig, uuidInstall);
-
-                    }),
-                    mergeMap(() => {
-                        return this.deleteMfNameSpace(kubeConfig, uuidInstall);
-                    }),
-                );
-            }),
-        ).subscribe(() => {
-
-        }, (err: any) => {
-            this.logger.error('uninstallCluster err  ', {user, cluster, err});
-            this.updateStatus(user, cluster.idCluster, {
-                step: ClusterSteps.UNINSTALL,
-                status: ClusterStatus.ERROR,
-                message: err.message,
-            });
-        }, () => {
-            this.logger.log('uninstallCluster  End ', {user, cluster});
-            this.updateStatus(user, cluster.idCluster, {
-                step: ClusterSteps.UNINSTALL,
-                status: ClusterStatus.UNINSTALL,
-            });
-        });
-        return of({
-            status: HttpStatus.ACCEPTED,
-            message: Messages.uninstallCLusterProgress,
         });
 
     }
@@ -436,8 +377,8 @@ export class ClusterService {
         const kubelessVersion = '1.0.8';
 
         return this.isDeploymentExist(kubeConfig, 'kubeless').pipe(
-            mergeMap((exist: boolean) => {
-                if (exist)
+            mergeMap((existed: boolean) => {
+                if (existed)
                     return of(true);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLKUBELESS,
@@ -469,35 +410,6 @@ export class ClusterService {
 
     }
 
-    private uninstalKubeless(kubeConfig: IkubeConfig, uuidInstall: string) {
-        const kubelessVersion = '1.0.7';
-        this.addClusterStatus({
-            step: ClusterSteps.UNINSTALLKUBELESS,
-            status: ClusterStatus.UNINSTALL,
-        }, kubeConfig.id, uuidInstall);
-        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kubeless/kubeless-v${kubelessVersion}.yaml`)).pipe(
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLKUBELESS,
-                    status: ClusterStatus.ERROR,
-                    message: err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.UNINSTALLKUBELESS,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLKUBELESS,
-                    status: ClusterStatus.UNINSTALL,
-                }, kubeConfig.id, uuidInstall);
-
-            }));
-    }
-
     private creeteMfNameSpace(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
             step: ClusterSteps.CREETENAMESPACE,
@@ -526,41 +438,13 @@ export class ClusterService {
             }));
     }
 
-    private deleteMfNameSpace(kubeConfig: IkubeConfig, uuidInstall: string) {
-        this.addClusterStatus({
-            step: ClusterSteps.DELETENAMESPACE,
-            status: ClusterStatus.REMOVING,
-        }, kubeConfig.id, uuidInstall);
-        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}microfunctions.namespace.yaml`)).pipe(
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.DELETENAMESPACE,
-                    status: ClusterStatus.ERROR,
-                    message: err.message || err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.DELETENAMESPACE,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.message || err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.DELETENAMESPACE,
-                    status: ClusterStatus.REMOVED,
-                }, kubeConfig.id, uuidInstall);
-
-            }));
-    }
-
     private installMetricsServer(kubeConfig: IkubeConfig, uuidInstall: string) {
         const metricsServerVersion = '0.4.2';
 
 
         return this.isServiceExist(kubeConfig,'metrics-server','microfunctions').pipe(
-            mergeMap((exist: boolean) => {
-                if (exist)
+            mergeMap((existed: boolean) => {
+                if (existed)
                     return of(true);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLMETRICSSERVER,
@@ -592,13 +476,14 @@ export class ClusterService {
         )
 
     }
+
     private installCertManager(kubeConfig: IkubeConfig, uuidInstall: string) {
         const certManagerVersion = '1.1.0';
 
 
         return this.isServiceExist(kubeConfig, 'cert-manager').pipe(
-            mergeMap((exist: boolean) => {
-                if (exist)
+            mergeMap((existed: boolean) => {
+                if (existed)
                     return of(true);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLCERTMANAGER,
@@ -630,6 +515,7 @@ export class ClusterService {
         )
 
     }
+
     private installCertClusterIssuer(kubeConfig: IkubeConfig, uuidInstall: string) {
         this.addClusterStatus({
             step: ClusterSteps.ADDCERTCLUSTERISSUER,
@@ -656,37 +542,6 @@ export class ClusterService {
                 }, kubeConfig.id, uuidInstall);
 
             }));
-    }
-
-    private uninstallCertManager(kubeConfig: IkubeConfig, uuidInstall: string) {
-        const certManagerVersion = '1.1.0';
-
-        this.addClusterStatus({
-            step: ClusterSteps.UNINSTALLCERTMANAGER,
-            status: ClusterStatus.UNINSTALL,
-        }, kubeConfig.id, uuidInstall);
-        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}cert-manager/cert-manager-v${certManagerVersion}.yaml`)).pipe(
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLCERTMANAGER,
-                    status: ClusterStatus.ERROR,
-                    message: err.message || err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.UNINSTALLCERTMANAGER,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.message || err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLCERTMANAGER,
-                    status: ClusterStatus.UNINSTALL,
-                }, kubeConfig.id, uuidInstall);
-
-            }));
-
     }
 
     private installPrometheus(kubeConfig: IkubeConfig, uuidInstall: string) {
@@ -762,77 +617,21 @@ export class ClusterService {
 
     }
 
-    private uninstallPrometheus(kubeConfig: IkubeConfig, uuidInstall: string) {
-        this.addClusterStatus({
-            step: ClusterSteps.UNINSTALLPROMETHEUS,
-            status: ClusterStatus.UNINSTALL,
-        }, kubeConfig.id, uuidInstall);
-        const name = 'metrics';
-        const config: MetricsConfiguration = {
-            persistence: {
-                enabled: false,
-                storageClass: null,
-                size: '10G',
-            },
-            nodeExporter: {
-                enabled: true,
-            },
-            retention: {
-                time: '7d',
-                size: '5GB',
-            },
-            kubeStateMetrics: {
-                enabled: true,
-            },
-            alertManagers: null,
-            replicas: 1,
-            storageClass: null,
-        };
-        return of(config).pipe(
-            mergeMap((config$: any) => {
-                const resources: string[] = this.renderTemplates(config$, name);
-                return fromArray(resources.reverse()).pipe(
-                    mergeMap((resource: string) => {
-                        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, resource, null));
-                    }),
-                );
-
-            }),
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLPROMETHEUS,
-                    status: ClusterStatus.ERROR,
-                    message: err.message || err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.UNINSTALLPROMETHEUS,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.message || err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLPROMETHEUS,
-                    status: ClusterStatus.UNINSTALL,
-                }, kubeConfig.id, uuidInstall);
-
-            }),
-        );
-
-    }
 
     private installKong(kubeConfig: IkubeConfig, uuidInstall: string) {
-        const kongVersion = '2.0.5';
+        const kongVersion = '2.3.3';
         return this.isServiceExist(kubeConfig, 'kong').pipe(
-            mergeMap((exist: boolean) => {
-                if (exist)
-                    return of(true);
+            mergeMap((existed: boolean) => {
+                if (existed)
+                    return this.installKongPrometheus(kubeConfig,uuidInstall);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLKONG,
                     status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/kong-v${kongVersion}.yaml`)).pipe(
+                    mergeMap(() => {
+                        return this.installKongPrometheus(kubeConfig,uuidInstall);
+                    }),
                     catchError((err: any) => {
                         this.addClusterStatus({
                             step: ClusterSteps.INSTALLKONG,
@@ -858,42 +657,15 @@ export class ClusterService {
 
     }
 
-    private uninstallKong(kubeConfig: IkubeConfig, uuidInstall: string) {
-        const kongVersion = '2.0.5';
-
-        this.addClusterStatus({
-            step: ClusterSteps.UNINSTALLKONG,
-            status: ClusterStatus.UNINSTALL,
-        }, kubeConfig.id, uuidInstall);
-        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/kong-v${kongVersion}.yaml`)).pipe(
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLKONG,
-                    status: ClusterStatus.ERROR,
-                    message: err.message || err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.UNINSTALLKONG,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.message || err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLKONG,
-                    status: ClusterStatus.UNINSTALL,
-                }, kubeConfig.id, uuidInstall);
-
-            }));
+    private installKongPrometheus(kubeConfig: IkubeConfig, uuidInstall: string){
+        return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/prometheus-plugin.yaml`))
     }
-
     private installIngress(kubeConfig: IkubeConfig, uuidInstall: string) {
         const kubelessVersion = '0.41.2';
 
         return this.isServiceExist(kubeConfig, 'nginx-ingress').pipe(
-            mergeMap((exist: boolean) => {
-                if (exist)
+            mergeMap((existed: boolean) => {
+                if (existed)
                     return of(true);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLINGRESS,
@@ -923,35 +695,6 @@ export class ClusterService {
             })
         )
 
-    }
-
-    private uninstalIngress(kubeConfig: IkubeConfig, uuidInstall: string) {
-        const kubelessVersion = '0.41.2';
-        this.addClusterStatus({
-            step: ClusterSteps.UNINSTALLINGRESS,
-            status: ClusterStatus.UNINSTALL,
-        }, kubeConfig.id, uuidInstall);
-        return from(this.kubernetesService.delete(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}/ingress/do/ingress-v${kubelessVersion}.yaml`)).pipe(
-            catchError((err: any) => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLINGRESS,
-                    status: ClusterStatus.ERROR,
-                    message: err.message || err.response.body.message,
-                }, kubeConfig.id, uuidInstall);
-                throw new RpcException({
-                    step: ClusterSteps.UNINSTALLINGRESS,
-                    status: HttpStatus.EXPECTATION_FAILED,
-                    code: MessageErrorCode.CLUSTER_ERROR,
-                    message: err.message || err.response.body.message,
-                });
-            }),
-            tap(() => {
-                this.addClusterStatus({
-                    step: ClusterSteps.UNINSTALLINGRESS,
-                    status: ClusterStatus.UNINSTALL,
-                }, kubeConfig.id, uuidInstall);
-
-            }));
     }
 
     private retryStrategy = ({
