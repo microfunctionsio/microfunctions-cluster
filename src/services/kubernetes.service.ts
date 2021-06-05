@@ -11,16 +11,20 @@ import {RpcException} from '@nestjs/microservices';
 import {MessageErrorCode} from '../helpers/error.helpers';
 import {promisify} from 'util';
 import {Service} from "../classes/service";
-
+import * as requestPromise from 'request-promise-native';
 import fse = require('fs-extra');
-
-import {PodStatus} from "@microfunctions/common";
+import moment = require('moment');
+import {IMetricsQuery, IMetricsReqParams, IPodMetrics, PodStatus} from "@microfunctions/common";
 import {Pod} from "../classes/pod";
+import {stringify} from "querystring";
 
 interface RouteParams {
   [key: string]: string | undefined;
 }
 
+export interface IClusterMetrics extends IPodMetrics{
+
+}
 export type ApiRequest = {
   cluster?: Cluster;
   payload: any;
@@ -31,6 +35,7 @@ export type ApiRequest = {
   response?: http.ServerResponse;
   query: URLSearchParams;
   path: string;
+  headers:any;
 };
 
 export interface IkubeConfig {
@@ -100,7 +105,7 @@ export class KubernetesService {
     }
   }
 
-  public getNodes(kubeConfig: string): Observable<any> {
+  public getClusterInfo(kubeConfig: string): Observable<any> {
     const kc = new k8s.KubeConfig();
     kc.loadFromString(kubeConfig);
     const k8sCoreApi = kc.makeApiClient(k8s.CoreV1Api);
@@ -153,7 +158,179 @@ export class KubernetesService {
       }),
     );
   }
+  public getNodes(kubeConfig: string): Observable<Node[]> {
+    const kc = new k8s.KubeConfig();
+    kc.loadFromString(kubeConfig);
+    const k8sCoreApi = kc.makeApiClient(k8s.CoreV1Api);
+    return from(k8sCoreApi.listNode()).pipe(
+        catchError((error: any) => {
 
+          if (error instanceof TypeError) {
+            return throwError(error);
+          }
+          let errorMessage = error.message;
+          if (error.statusCode) {
+            if (error.statusCode >= 400 && error.statusCode < 500) {
+              errorMessage = 'Invalid credentials';
+            } else {
+              errorMessage = error.error || error.message;
+            }
+          } else if (error.failed === true) {
+            if (error.timedOut === true) {
+              errorMessage = 'Connection timed out';
+            } else {
+              errorMessage = 'Failed to fetch credentials';
+            }
+          } else if (error.code) {
+            errorMessage = error.code;
+          }
+          return throwError(errorMessage);
+        }),
+        map((response: any) => {
+          return Object.values(response.body.items).map(
+              (item: any) => {
+                return new Node(item);
+              },
+          );
+        }),
+        map((nodes: Node[]) => {
+          if (!nodes) {
+            throw new ClusterAccessError('0 nodes');
+          }
+          return nodes
+        }),
+    );
+  }
+  public getClusterMetrics(
+      baseUrl: string,
+      apiKey: string,
+      nodes:Node[],
+      rangePrame: number
+  ): Observable<IClusterMetrics> {
+
+
+    const rateAccuracy = "1m";
+    const nodeSelector = nodes.map(node => node.name).join('|');
+    const metrics: IMetricsQuery = {
+      memoryUsage: `
+          sum(
+            node_memory_MemTotal_bytes - (node_memory_MemFree_bytes + node_memory_Buffers_bytes + node_memory_Cached_bytes)
+          ) by (kubernetes_name)
+        `.replace(/_bytes/g, `_bytes{kubernetes_node=~"${nodeSelector}"}`),
+      memoryRequests: `sum(kube_pod_container_resource_requests{node=~"${nodeSelector}", resource="memory"}) by (component)`,
+      memoryLimits: `sum(kube_pod_container_resource_limits{node=~"${nodeSelector}", resource="memory"}) by (component)`,
+      memoryCapacity: `sum(kube_node_status_capacity{node=~"${nodeSelector}", resource="memory"}) by (component)`,
+      cpuUsage: `sum(rate(node_cpu_seconds_total{kubernetes_node=~"${nodeSelector}", mode=~"user|system"}[${rateAccuracy}]))`,
+      cpuRequests:`sum(kube_pod_container_resource_requests{node=~"${nodeSelector}", resource="cpu"}) by (component)`,
+      cpuLimits: `sum(kube_pod_container_resource_limits{node=~"${nodeSelector}", resource="cpu"}) by (component)`,
+      cpuCapacity: `sum(kube_node_status_capacity{node=~"${nodeSelector}", resource="cpu"}) by (component)`,
+      podUsage: `sum({__name__=~"kubelet_running_pod_count|kubelet_running_pods", instance=~"${nodeSelector}"})`,
+      podCapacity: `sum(kube_node_status_capacity{node=~"${nodeSelector}", resource="pods"}) by (component)`,
+    }
+    const reqParams: IMetricsReqParams = {};
+    const {range = rangePrame || 1, step = 60} = reqParams;
+    let {start, end} = reqParams;
+    if (!start && !end) {
+      const timeNow = Date.now() / 1000;
+      const now = moment
+          .unix(timeNow)
+          .startOf('minute')
+          .unix(); // round date to minutes
+      start = now - range;
+      end = now;
+    }
+
+    const path = `http://${baseUrl}/prometheus/api/v1/query_range`;
+
+    const query: URLSearchParams = new URLSearchParams(
+        stringify({
+          start,
+          end,
+          step,
+        }),
+    );
+    const headers = {
+      'Content-type': 'application/json',
+      'x-apikey-header': apiKey,
+    };
+    const request: ApiRequest = {
+      payload: metrics,
+      query: query,
+      path,
+      headers,
+    };
+
+    return from(this.getMetrics(request)).pipe(
+        map((response: any) => {
+          return response as IPodMetrics;
+        }),
+    );
+  }
+
+  private async getMetrics(request: ApiRequest) {
+
+    const query: IMetricsQuery = request.payload;
+
+    const metricsUrl = request.path;
+
+    const queryParams: IMetricsQuery = {};
+    request.query.forEach((value: string, key: string) => {
+      queryParams[key] = value;
+    });
+
+    // prometheus metrics loader
+    const attempts: { [query: string]: number } = {};
+    const maxAttempts = 5;
+
+    const loadMetrics = (orgQuery: string): Promise<any> => {
+      const query = orgQuery.trim();
+      const attempt = (attempts[query] = (attempts[query] || 0) + 1);
+      return requestPromise
+          .get(metricsUrl, {
+            resolveWithFullResponse: false,
+            headers: request.headers,
+            json: true,
+            // timeout: '333',
+            qs: {
+              query: query,
+              ...queryParams,
+            },
+          })
+          .catch(async error => {
+            if (
+                attempt < maxAttempts &&
+                error.statusCode && error.statusCode != 404
+            ) {
+              await new Promise(resolve => setTimeout(resolve, attempt * 1000)); // add delay before repeating request
+              return loadMetrics(query);
+            }
+            return {
+              status: error.toString(),
+              data: {
+                result: [],
+              },
+            };
+          });
+    };
+
+    // return data in same structure as query
+    // return data in same structure as query
+    let data: any;
+    if (typeof query === 'string') {
+      data = await loadMetrics(query);
+
+    } else if (Array.isArray(query)) {
+      data = await Promise.all(query.map(loadMetrics));
+
+    } else {
+      data = {};
+      const result = await Promise.all(Object.values(query).map(loadMetrics));
+      Object.keys(query).forEach((metricName, index) => {
+        data[metricName] = result[index];
+      });
+    }
+    return data;
+  }
   public async apply(kubeConfig: string, spec: string, specPath?: string): Promise<k8s.KubernetesObject[]> {
     const kc = new k8s.KubeConfig();
     kc.loadFromString(kubeConfig);
@@ -234,7 +411,6 @@ export class KubernetesService {
                 ).filter((service: Service) => service.getStatus() === "Active");
               }),
               map((services: Service[]) => {
-                console.log(services.map((s) => s.name))
                 return services.find((s) => s.name.includes(serviceName)) ? true : false
               }),
 
@@ -259,7 +435,6 @@ export class KubernetesService {
                 ).filter((pod: Pod) => pod.getStatus() === PodStatus.RUNNING);
               }),
               map((services: Pod[]) => {
-                console.log(services.map((s) => s.name))
                 return services.find((s) => s.name.includes(deploymentName)) ? true : false
               }),
 
@@ -268,8 +443,6 @@ export class KubernetesService {
     );
 
   }
-
-
 
   private dumpConfigYaml(kc: k8s.KubeConfig): string {
 
