@@ -46,14 +46,14 @@ spec:
       serviceAccountName: prometheus
       initContainers:
         - name: chown
-          image: docker.io/alpine:3.9
+          image: docker.io/alpine:3.12
           command: ["chown", "-R", "65534:65534", "/var/lib/prometheus"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/prometheus
       containers:
         - name: prometheus
-          image: docker.io/kontenapharos/prometheus:v2.11.1
+          image: quay.io/prometheus/prometheus:v2.27.1
           args:
             - --web.listen-address=0.0.0.0:9090
             - --web.route-prefix=/prometheus

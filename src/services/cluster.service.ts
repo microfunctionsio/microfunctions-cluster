@@ -1,9 +1,9 @@
 import {HttpStatus, Inject, Injectable} from '@nestjs/common';
 import {ClusterDto} from '../dtos/cluster.dto';
 import {Cluster, ClusterDocument} from '../entitys/cluster';
-import {ClusterAccessError, IkubeConfig, KubernetesService} from './kubernetes.service';
+import {ClusterAccessError, IClusterMetrics, IkubeConfig, KubernetesService} from './kubernetes.service';
 import {ConfigService} from '@nestjs/config';
-import {catchError, filter, map, mergeMap, retryWhen, tap, toArray} from 'rxjs/operators';
+import {catchError, map, mergeMap, retryWhen, tap, toArray} from 'rxjs/operators';
 import {RpcException} from '@nestjs/microservices';
 import {catchErrorMongo, MessageErrorCode} from '../helpers/error.helpers';
 import {from, Observable, of, throwError, timer} from 'rxjs';
@@ -24,9 +24,10 @@ import {fromArray} from 'rxjs/internal/observable/fromArray';
 import {supportVersions} from '../helpers/support.version';
 import {MicroFunctionException} from "../errors/micro.function.Exception";
 import {Messages, MessagesError} from "../messages";
-import {Model} from "mongoose";
-import {InjectModel} from "@nestjs/mongoose";
-import {IUser,IResponse, ClusterStatus ,ClusterSteps,MetricsConfiguration} from "@microfunctions/common";
+import {Connection, Model} from "mongoose";
+import {InjectConnection, InjectModel} from "@nestjs/mongoose";
+import {ClusterStatus, ClusterSteps, IResponse, IUser, MetricsConfiguration} from "@microfunctions/common";
+import {Node} from "../classes/node";
 
 
 @Injectable()
@@ -38,6 +39,7 @@ export class ClusterService {
         @InjectModel(StatusHist.name) private statusHistModule: Model<StatusHistDocument>,
         protected configService: ConfigService,
         private kubernetesService: KubernetesService,
+        @InjectConnection() private connection: Connection,
         @Inject(WINSTON_MODULE_PROVIDER) protected readonly logger: Logger) {
         this.organizationSecret = this.configService.get('CLUSTER_SECRET');
     }
@@ -58,7 +60,7 @@ export class ClusterService {
         return this.kubernetesService.parseCluster(clusterDto.config).pipe(
             mergeMap((clusterInfo: IkubeConfig) => {
 
-                return this.kubernetesService.getNodes(clusterInfo.kubeConfig);
+                return this.kubernetesService.getClusterInfo(clusterInfo.kubeConfig);
             }),
             catchError((error: any) => {
                 console.log('addCluster raised:', error);
@@ -142,7 +144,7 @@ export class ClusterService {
                 cluster.canUninstall = false;//cluster.idUser === user.id && ((cluster.status.step === ClusterSteps.INSTALL && cluster.status.status == ClusterStatus.INSTALLED) || (cluster.status.step === ClusterSteps.ACTIVE && cluster.status.status == ClusterStatus.ACTIVE) || cluster.status.status === ClusterStatus.ERROR || false);
                 cluster.kubeConfig = decrypt(this.organizationSecret, cluster.ivString, cluster.kubeConfig);
 
-                return this.kubernetesService.getNodes(cluster.kubeConfig).pipe(
+                return this.kubernetesService.getClusterInfo(cluster.kubeConfig).pipe(
                     catchError((err) => {
                         this.logger.error('listCluster  Start ', {user, cluster, err});
                         cluster.status = {
@@ -204,13 +206,60 @@ export class ClusterService {
 
     }
 
+    public getClusterMetrics(user: IUser, cluster: ClusterDto) {
+        const {range} = cluster;
+        return this.getClusterConfig(user, cluster.idCluster).pipe(
+            mergeMap((response: IResponse) => {
+                return this.getBaseUrlMetrics( cluster.idCluster).pipe(
+                    mergeMap((baseUrl:any)=>{
+                        if(baseUrl){
+                            return this.kubernetesService.getNodes(response.data.kubeConfig).pipe(
+                                mergeMap((nodes:Node[])=>{
+                                  return   this.kubernetesService.getClusterMetrics(baseUrl.baseUrl,baseUrl.apiKey,nodes,range).pipe(
+                                      map((iClusterMetrics:IClusterMetrics)=>{
+                                         return {
+                                             status:HttpStatus.OK,
+                                             data:iClusterMetrics
+                                         }
+
+                                      })
+                                  )
+                                })
+                            );
+                        }
+                        return   of({
+                            status: HttpStatus.OK,
+                            data: {},
+                        });
+
+                }))
+            })
+        );
+    }
+
+    private getBaseUrlMetrics( idCluster: string): any {
+        return from(this.connection.collection('namespaces').findOne({'idCluster': idCluster})).pipe(
+            map((namespaces: any) => {
+                if(namespaces){
+                    return {
+                        baseUrl: namespaces.host.host,
+                        apiKey: namespaces.apiKey
+                    }
+                }else {
+                    return undefined;
+                }
+
+            })
+        )
+
+    }
+
     public getClusterConfig(user: IUser, idCluster: string): Observable<IResponse> {
 
         return from(this.clusterModule.findOne({_id: idCluster})).pipe(
             map((cluster: any) => {
                 if (cluster) {
                     const kubeConfig = decrypt(this.organizationSecret, cluster.ivString, cluster.kubeConfig);
-                    this.kubernetesService.getCoreApi(kubeConfig);
                     const clusterInfo: IkubeConfig = {kubeConfig: kubeConfig, name: cluster.name, id: cluster._id};
                     return {
                         status: HttpStatus.OK,
@@ -228,7 +277,7 @@ export class ClusterService {
     }
 
     public installCluster(user: IUser, cluster: ClusterDto) {
-        this.logger.log('installCluster  Start ', {user, idCluster:cluster.idCluster});
+        this.logger.log('installCluster  Start ', {user, idCluster: cluster.idCluster});
         const uuidInstall: string = uuid();
         this.getClusterConfig(user, cluster.idCluster).pipe(
             map((response: IResponse) => response.data),
@@ -365,7 +414,7 @@ export class ClusterService {
 
     }
 
-    private isServiceExist(kubeConfig: IkubeConfig, serviceName: string,namespaced:string='microfunctions'): Observable<boolean> {
+    private isServiceExist(kubeConfig: IkubeConfig, serviceName: string, namespaced: string = 'microfunctions'): Observable<boolean> {
         return this.kubernetesService.isServiceExist(kubeConfig, namespaced, serviceName);
     }
 
@@ -442,7 +491,7 @@ export class ClusterService {
         const metricsServerVersion = '0.4.2';
 
 
-        return this.isServiceExist(kubeConfig,'metrics-server','microfunctions').pipe(
+        return this.isServiceExist(kubeConfig, 'metrics-server', 'microfunctions').pipe(
             mergeMap((existed: boolean) => {
                 if (existed)
                     return of(true);
@@ -623,14 +672,14 @@ export class ClusterService {
         return this.isServiceExist(kubeConfig, 'kong').pipe(
             mergeMap((existed: boolean) => {
                 if (existed)
-                    return this.installKongPrometheus(kubeConfig,uuidInstall);
+                    return this.installKongPrometheus(kubeConfig, uuidInstall);
                 this.addClusterStatus({
                     step: ClusterSteps.INSTALLKONG,
                     status: ClusterStatus.INSTALLING,
                 }, kubeConfig.id, uuidInstall);
                 return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/kong-v${kongVersion}.yaml`)).pipe(
                     mergeMap(() => {
-                        return this.installKongPrometheus(kubeConfig,uuidInstall);
+                        return this.installKongPrometheus(kubeConfig, uuidInstall);
                     }),
                     catchError((err: any) => {
                         this.addClusterStatus({
@@ -657,9 +706,10 @@ export class ClusterService {
 
     }
 
-    private installKongPrometheus(kubeConfig: IkubeConfig, uuidInstall: string){
+    private installKongPrometheus(kubeConfig: IkubeConfig, uuidInstall: string) {
         return from(this.kubernetesService.apply(kubeConfig.kubeConfig, null, `${this.configService.get('MANIFEST_PATH')}kong/prometheus-plugin.yaml`))
     }
+
     private installIngress(kubeConfig: IkubeConfig, uuidInstall: string) {
         const kubelessVersion = '0.41.2';
 
@@ -774,6 +824,6 @@ export class ClusterService {
         const versions: string[] = clusterInfo.version.split('.');
         const version = `${versions[0]}.${versions[1]}.*`;
 
-        return supportVersions.includes(version) ;
+        return supportVersions.includes(version);
     }
 }

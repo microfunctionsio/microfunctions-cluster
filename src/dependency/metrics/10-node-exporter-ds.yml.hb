@@ -41,12 +41,12 @@ spec:
       hostPID: true
       containers:
       - name: node-exporter
-        image: docker.io/kontenapharos/prometheus-node-exporter:v0.18.0
+        image: quay.io/prometheus/node-exporter:v1.1.2
         args:
           - --path.procfs=/host/proc
           - --path.sysfs=/host/sys
           - --path.rootfs=/host/root
-          - --collector.filesystem.ignored-mount-points=^/(dev|proc|sys|var/lib/docker|var/lib/containers/.+)($|/)
+          - --collector.filesystem.ignored-mount-points=^/(dev|proc|sys|var/lib/docker|var/lib/containerd|var/lib/containers/.+)($|/)
           - --collector.filesystem.ignored-fs-types=^(autofs|binfmt_misc|cgroup|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|sysfs|tracefs)$
         ports:
           - name: metrics
@@ -54,7 +54,7 @@ spec:
         resources:
           requests:
             cpu: 10m
-            memory: 50Mi
+            memory: 24Mi
           limits:
             cpu: 200m
             memory: 100Mi

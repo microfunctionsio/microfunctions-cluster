@@ -42,6 +42,11 @@ export class ClusterController {
   getClusterStatus(@Payload() cluster: ClusterDto, @GetUser() user: IUser) {
     return this.clusterService.getClusterStatus(user, cluster);
   }
+  @MessagePattern({ cmd: 'metrics-cluster' })
+  getClusterMetrics(@Payload() cluster: ClusterDto, @GetUser() user: IUser) {
+    return this.clusterService.getClusterMetrics(user, cluster);
+  }
+
 
   @MessagePattern({ cmd: 'support-version-cluster' })
   listSupportVersion(@GetUser() user: IUser) {
